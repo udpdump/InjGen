@@ -1,0 +1,20 @@
+# Build directories
+build/
+bin/
+out/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosv
+*.sln.docstates
+
+# Visual Studio temporary files
+*.VC.db
+*.opendb
+.vs/
+Debug/
+Release/
+x64/Debug/
