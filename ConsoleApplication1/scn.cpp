@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <fstream>
+#include <dirent.h>
 #include <cerrno>
 #endif
 
@@ -476,6 +477,50 @@ static bool read_process_memory(const DWORD pid, const uintptr_t address, void* 
     return false;
 }
 
+static bool is_attach_listener_present(const DWORD pid) {
+    std::string taskPath = "/proc/" + std::to_string(pid) + "/task";
+    DIR* dir = opendir(taskPath.c_str());
+    if (dir) {
+        struct dirent* entry = nullptr;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+            std::string commPath = taskPath + "/" + entry->d_name + "/comm";
+            std::ifstream f(commPath);
+            std::string comm;
+            if (std::getline(f, comm)) {
+                if (comm == "Attach Listener") {
+                    closedir(dir);
+                    return true;
+                }
+            }
+        }
+        closedir(dir);
+    }
+
+    // Also check for dynamic attach domain socket
+    std::string sockPath = "/tmp/.java_pid" + std::to_string(pid);
+    if (access(sockPath.c_str(), F_OK) == 0) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool check_agent_modules(const DWORD pid) {
+    std::string mapsPath = "/proc/" + std::to_string(pid) + "/maps";
+    std::ifstream mapsFile(mapsPath);
+    if (!mapsFile.is_open()) return false;
+
+    std::string line;
+    while (std::getline(mapsFile, line)) {
+        if (line.find("libinstrument.so") != std::string::npos ||
+            line.find("instrument.dll") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static __forceinline bool __fastcall __vld_pattern(const DWORD pid) {
     inst_set cpu_instruction = __intr();
     __mem_scan_ptr memory_scan = nullptr;
@@ -498,59 +543,92 @@ static __forceinline bool __fastcall __vld_pattern(const DWORD pid) {
 
     std::string mapsPath = "/proc/" + std::to_string(pid) + "/maps";
     std::ifstream mapsFile(mapsPath);
-    if (!mapsFile.is_open()) return false;
+    if (mapsFile.is_open()) {
+        std::string line;
+        std::vector<unsigned char> buffer;
 
-    std::string line;
-    std::vector<unsigned char> buffer;
+        while (std::getline(mapsFile, line)) {
+            if (line.empty()) continue;
 
-    while (std::getline(mapsFile, line)) {
-        if (line.empty()) continue;
-
-        size_t dash = line.find('-');
-        size_t space1 = line.find(' ');
-        if (dash == std::string::npos || space1 == std::string::npos || dash >= space1) continue;
-
-        // Permissions: readable and writable (rw)
-        if (space1 + 2 >= line.size() || line[space1 + 1] != 'r' || line[space1 + 2] != 'w') {
-            continue;
-        }
-
-        // Skip non-heap kernel mappings
-        if (line.find('[') != std::string::npos) {
-            continue;
-        }
-
-        try {
-            uintptr_t start = std::stoull(line.substr(0, dash), nullptr, 16);
-            uintptr_t end = std::stoull(line.substr(dash + 1, space1 - (dash + 1)), nullptr, 16);
-            size_t regionSize = end - start;
-
-            size_t bufferSize = std::min(regionSize / 2, static_cast<size_t>(2 * 1024 * 1024));
-            if (bufferSize < MIN_STRING_LENGTH) {
-                bufferSize = std::min(regionSize, static_cast<size_t>(2 * 1024 * 1024));
-            }
-            if (bufferSize < MIN_STRING_LENGTH) continue;
-
-            if (buffer.size() < bufferSize) {
-                buffer.resize(bufferSize);
+            // Check if mapped jar files indicate tested game clients
+            std::string lineLower = line;
+            std::transform(lineLower.begin(), lineLower.end(), lineLower.begin(), ::tolower);
+            if (lineLower.find("com/lunarclient") != std::string::npos ||
+                lineLower.find("lunar") != std::string::npos ||
+                lineLower.find("feather") != std::string::npos ||
+                lineLower.find("fabric") != std::string::npos ||
+                lineLower.find("forge") != std::string::npos ||
+                lineLower.find("minecraft") != std::string::npos) {
+                return true;
             }
 
-            size_t bytesRead = 0;
-            if (read_process_memory(pid, start, buffer.data(), bufferSize, &bytesRead) && bytesRead >= MIN_STRING_LENGTH) {
-                std::vector<std::string> memory_dump;
-                if (simd_scan)
-                    memory_dump = simd_scan(buffer.data(), bytesRead);
-                else
-                    memory_dump = memory_scan(buffer.data(), bytesRead);
+            size_t dash = line.find('-');
+            size_t space1 = line.find(' ');
+            if (dash == std::string::npos || space1 == std::string::npos || dash >= space1) continue;
 
-                for (const auto& build : memory_dump) {
-                    if (build.find("com/lunarclient") != std::string::npos) {
-                        return true;
+            // Permissions: readable and writable (rw)
+            if (space1 + 2 >= line.size() || line[space1 + 1] != 'r' || line[space1 + 2] != 'w') {
+                continue;
+            }
+
+            // Skip non-heap kernel mappings
+            if (line.find('[') != std::string::npos) {
+                continue;
+            }
+
+            try {
+                uintptr_t start = std::stoull(line.substr(0, dash), nullptr, 16);
+                uintptr_t end = std::stoull(line.substr(dash + 1, space1 - (dash + 1)), nullptr, 16);
+                size_t regionSize = end - start;
+
+                size_t bufferSize = std::min(regionSize / 2, static_cast<size_t>(2 * 1024 * 1024));
+                if (bufferSize < MIN_STRING_LENGTH) {
+                    bufferSize = std::min(regionSize, static_cast<size_t>(2 * 1024 * 1024));
+                }
+                if (bufferSize < MIN_STRING_LENGTH) continue;
+
+                if (buffer.size() < bufferSize) {
+                    buffer.resize(bufferSize);
+                }
+
+                size_t bytesRead = 0;
+                if (read_process_memory(pid, start, buffer.data(), bufferSize, &bytesRead) && bytesRead >= MIN_STRING_LENGTH) {
+                    std::vector<std::string> memory_dump;
+                    if (simd_scan)
+                        memory_dump = simd_scan(buffer.data(), bytesRead);
+                    else
+                        memory_dump = memory_scan(buffer.data(), bytesRead);
+
+                    for (const auto& build : memory_dump) {
+                        if (build.find("com/lunarclient") != std::string::npos ||
+                            build.find("net/minecraft") != std::string::npos ||
+                            build.find("net/fabricmc") != std::string::npos ||
+                            build.find("feather") != std::string::npos) {
+                            return true;
+                        }
                     }
                 }
+            } catch (...) {
+                continue;
             }
-        } catch (...) {
-            continue;
+        }
+    }
+
+    // Also check cmdline
+    std::string cmdPath = "/proc/" + std::to_string(pid) + "/cmdline";
+    std::ifstream cmdFile(cmdPath, std::ios::binary);
+    if (cmdFile.is_open()) {
+        std::string cmd;
+        while (std::getline(cmdFile, cmd, '\0')) {
+            std::string cmdLower = cmd;
+            std::transform(cmdLower.begin(), cmdLower.end(), cmdLower.begin(), ::tolower);
+            if (cmdLower.find("lunar") != std::string::npos ||
+                cmdLower.find("feather") != std::string::npos ||
+                cmdLower.find("fabric") != std::string::npos ||
+                cmdLower.find("minecraft") != std::string::npos ||
+                cmdLower.find("forge") != std::string::npos) {
+                return true;
+            }
         }
     }
 
@@ -564,7 +642,6 @@ static __forceinline bool __fastcall trace(const DWORD pid, const DWORD_PTR base
 
     std::string line;
     std::vector<uint8_t> buffer;
-    bool permWarningShown = false;
 
     while (std::getline(mapsFile, line)) {
         if (line.empty()) continue;
@@ -605,10 +682,6 @@ static __forceinline bool __fastcall trace(const DWORD pid, const DWORD_PTR base
                         return true;
                     }
                 }
-            } else if (!permWarningShown && errno == EPERM) {
-                permWarningShown = true;
-                std::cerr << "[!] Warning: Cannot read memory of PID " << pid << ": Operation not permitted.\n"
-                          << "[!] Run with sudo or setcap 'cap_sys_ptrace=eip'.\n";
             }
         } catch (...) {
             continue;
@@ -628,9 +701,27 @@ void __fastcall start_memory_scan(const DWORD pid) {
     auto [baseAddress, endAddress] = __get_mem_range(pid);
     if (baseAddress == 0 || endAddress == 0) __trigger_err();
 
-    bool flag = true;
-    flag &= trace(pid, baseAddress, endAddress, 524294); // +B8F450 - 06- push es
-    flag &= trace(pid, baseAddress, endAddress, 4242546329); /* +B8F400 - 99 - cdq +B8F401 - 1E - push ds +B8F402 - E0 FC - loopne +B8F400 */
+    bool flag = false;
+
+    // 1. Dynamic JVMTI / Java agent detection (Attach Listener thread & domain socket)
+    if (is_attach_listener_present(pid)) {
+        flag = true;
+    }
+
+    // 2. Injected agent native modules (libinstrument.so / instrument.dll)
+    if (!flag && check_agent_modules(pid)) {
+        flag = true;
+    }
+
+    // 3. Memory trace signatures
+    if (!flag) {
+        bool mem_flag = true;
+        mem_flag &= trace(pid, baseAddress, endAddress, 524294);
+        mem_flag &= trace(pid, baseAddress, endAddress, 4242546329);
+        if (mem_flag) {
+            flag = true;
+        }
+    }
 
     if (flag) {
         std::cout << "Validating detection...\n";
