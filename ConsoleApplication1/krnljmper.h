@@ -1,5 +1,7 @@
 #pragma once
 
+#ifdef _WIN32
+
 #ifndef Ke_HEADER_H_
 #define Ke_HEADER_H_
 
@@ -277,4 +279,5 @@ EXTERN_C NTSTATUS KeNtOpenProcess(
 	IN POBJECT_ATTRIBUTES ObjectAttributes,
 	IN PCLIENT_ID ClientId OPTIONAL);
 
-#endif
+#endif // Ke_HEADER_H_
+#endif // _WIN32

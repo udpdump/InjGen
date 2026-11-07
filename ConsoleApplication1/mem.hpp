@@ -1,8 +1,28 @@
-#include <intrin.h>
+#pragma once
+
 #include <vector>
 #include <string>
-#include <windows.h>
 #include <iostream>
+#include <cstdint>
+
+#ifdef _WIN32
+#include <intrin.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/types.h>
+typedef uint32_t DWORD;
+typedef uintptr_t DWORD_PTR;
+#ifndef __fastcall
+#define __fastcall
+#endif
+#ifndef __forceinline
+#define __forceinline inline __attribute__((always_inline))
+#endif
+#ifndef __vectorcall
+#define __vectorcall
+#endif
+#endif
 
 constexpr size_t MIN_STRING_LENGTH = 12;
 
