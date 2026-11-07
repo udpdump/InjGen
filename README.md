@@ -34,3 +34,22 @@ InjGen is a program focused in detecting any external **JNI/JVMTI injection** in
 
 ### Notes
 JNI and JVMTI injections are not the only two injections in the world, if a client injects by using the Forge API (Vape Lite can do it), it won't be detected as using Forge doesn't imply memory changes in the JVM
+
+### Building & Running
+
+#### Linux
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+./build/InjGen
+```
+*Note for Linux: If your system has Yama ptrace restriction enabled (`ptrace_scope > 0`), run with `sudo` or grant `cap_sys_ptrace`:*
+```bash
+sudo ./build/InjGen
+# or
+sudo setcap cap_sys_ptrace=eip ./build/InjGen
+./build/InjGen
+```
+
+#### Windows
+Build via Visual Studio (`Client Detector.sln`) or via CMake.
