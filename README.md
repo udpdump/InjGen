@@ -1,4 +1,8 @@
-InjGen is a program focused in detecting any external **JNI/JVMTI injection** into a Java program. As a PoC, it's designed to detect ghost clients in the Minecraft game
+# InjGen (Linux & Windows)
+
+> **InjGen Linux Port:** This fork brings full native Linux support to InjGen while preserving complete Windows compatibility. It replaces platform-locked Windows syscalls with native Linux mechanisms (`/proc` virtual filesystem inspection, `process_vm_readv`, dynamic HotSpot Attach & JVMTI tracking, and SIMD string scanning), providing seamless cross-platform injection detection without requiring elevated privileges for core detection.
+
+InjGen is a program focused on detecting any external **JNI/JVMTI injection** into a Java program. As a PoC, it's designed to detect ghost clients in the Minecraft game.
 
 ### Tested detections
 
@@ -43,7 +47,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ./build/InjGen
 ```
-*Note for Linux: If your system has Yama ptrace restriction enabled (`ptrace_scope > 0`), run with `sudo` or grant `cap_sys_ptrace`:*
+*Note for Linux: Core JVMTI attach and agent detection works out-of-the-box as a regular user. If deep virtual memory scanning is desired on systems with strict Yama `ptrace_scope > 0`, run with `sudo` or grant `cap_sys_ptrace`:*
 ```bash
 sudo ./build/InjGen
 # or
